@@ -1,9 +1,8 @@
 import asyncio
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Header
-# ★★★ CORS対応のための追加ライブラリ ★★★
+from fastapi import FastAPI, File, UploadFile, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from rembg import remove, new_session
+from rembg import remove
 from PIL import Image
 import io
 import os
@@ -12,34 +11,26 @@ import os
 API_KEY_SECRET = os.environ.get("API_KEY_SECRET", "snapy-special-secret-2025")
 MAX_FILE_SIZE = 15 * 1024 * 1024  # 15MB
 MAX_RESOLUTION = 4000 * 4000      # 16メガピクセル
-PROCESSING_TIMEOUT = 45.0         # 45秒
+PROCESSING_TIMEOUT = 90.0         # 90秒
 
-MODELS = {
-    "medium": "u2netp",
-    "quality": "u2net_human_seg"
-}
+# ★★★ モデルを最も軽量な u2netp 一本に絞る ★★★
+STABLE_MODEL = "u2netp"
 
 app = FastAPI(title="Snapy Background Remover")
 
-# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-# ★★★ ここからがCORS（セキュリティ）設定の追加部分 ★★★
-# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+# --- CORS設定 ---
 origins = [
-    "https://empathywriting.com", # あなたのサイトのドメイン
-    "http://localhost", # ローカルでのテスト用（もしあれば）
-    "http://localhost:8080", # ローカルでのテスト用（もしあれば）
+    "https://empathywriting.com",
+    "http://localhost",
+    "http://localhost:8080",
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # すべてのHTTPメソッドを許可
-    allow_headers=["*"], # すべてのHTTPヘッダーを許可
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-# ★★★★★★★★★★★★★★★★★★★★★★★
-# ★★★ CORS設定の追加はここまで ★★★
-# ★★★★★★★★★★★★★★★★★★★★★★★
 
 @app.get("/", tags=["General"])
 def read_root():
@@ -48,11 +39,11 @@ def read_root():
 @app.post("/remove-background/", tags=["Image Processing"])
 async def process_image(
     file: UploadFile = File(...),
-    quality: str = Form("medium"),
     x_api_key: str = Header(None)
 ):
+    print("--- Request received ---")
     if x_api_key != API_KEY_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized: Invalid API Key")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     if file.size > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail=f"ファイルサイズが上限({MAX_FILE_SIZE // 1024 // 1024}MB)を超えています。")
@@ -65,21 +56,17 @@ async def process_image(
     except Exception:
         raise HTTPException(status_code=400, detail="無効な画像ファイルです。")
 
-    if quality not in MODELS:
-        raise HTTPException(status_code=400, detail="無効な品質設定です。")
-
-    selected_model = MODELS[quality]
-
+    print(f"--- Starting background removal with stable model: {STABLE_MODEL} ---")
     try:
-        async def remove_bg_task():
-            session = new_session(model_name=selected_model)
-            return remove(input_bytes, session=session)
-
-        output_bytes = await asyncio.wait_for(remove_bg_task(), timeout=PROCESSING_TIMEOUT)
+        output_bytes = await asyncio.wait_for(
+            asyncio.to_thread(remove, input_bytes, session_factory=lambda: new_session(STABLE_MODEL)),
+            timeout=PROCESSING_TIMEOUT
+        )
+        print("--- Background removal complete. Sending response. ---")
         return StreamingResponse(io.BytesIO(output_bytes), media_type="image/png")
-
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="処理がタイムアウトしました。画像が複雑すぎる可能性があります。")
+        print("--- ERROR: Processing timed out. ---")
+        raise HTTPException(status_code=504, detail="処理がタイムアウトしました。")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"--- ERROR: An unexpected error occurred: {e} ---")
         raise HTTPException(status_code=500, detail="サーバー内部でエラーが発生しました。")
