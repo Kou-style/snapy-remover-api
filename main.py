@@ -58,8 +58,9 @@ async def process_image(
 
     print(f"--- Starting background removal with stable model: {STABLE_MODEL} ---")
     try:
+        # rembgの処理を非同期で実行し、タイムアウトを設定
         output_bytes = await asyncio.wait_for(
-            asyncio.to_thread(remove, input_bytes, session_factory=lambda: new_session(STABLE_MODEL)),
+            asyncio.to_thread(remove, input_bytes),
             timeout=PROCESSING_TIMEOUT
         )
         print("--- Background removal complete. Sending response. ---")
